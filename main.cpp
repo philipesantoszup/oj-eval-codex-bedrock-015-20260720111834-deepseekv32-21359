@@ -4,16 +4,19 @@
 #include <vector>
 #include <algorithm>
 #include <cstring>
-#include <functional>
 
 using namespace std;
 
-const int NUM_BUCKETS = 19; // Prime number for better distribution
+const int NUM_BUCKETS = 19;
 const string DATA_FILE_PREFIX = "bucket_";
 
+// Custom hash function
 size_t hash_string(const string& str) {
-    hash<string> hasher;
-    return hasher(str);
+    size_t h = 0;
+    for (char c : str) {
+        h = h * 31 + static_cast<unsigned char>(c);
+    }
+    return h;
 }
 
 int get_bucket(const string& key) {

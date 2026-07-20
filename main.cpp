@@ -7,7 +7,7 @@
 
 using namespace std;
 
-const int NUM_BUCKETS = 19;
+const int NUM_BUCKETS = 20;
 const string DATA_FILE_PREFIX = "bucket_";
 
 // Custom hash function

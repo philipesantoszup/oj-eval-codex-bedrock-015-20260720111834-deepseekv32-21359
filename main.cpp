@@ -8,12 +8,16 @@
 
 using namespace std;
 
-const int NUM_BUCKETS = 19; // Prime number for better distribution
+const int NUM_BUCKETS = 19;
 const string DATA_FILE_PREFIX = "bucket_";
 
+// Simple hash function
 size_t hash_string(const string& str) {
-    hash<string> hasher;
-    return hasher(str);
+    size_t h = 0;
+    for (char c : str) {
+        h = h * 31 + c;
+    }
+    return h;
 }
 
 int get_bucket(const string& key) {
@@ -24,37 +28,33 @@ string get_bucket_filename(int bucket) {
     return DATA_FILE_PREFIX + to_string(bucket) + ".dat";
 }
 
+struct FileEntry {
+    char key[65];
+    int value;
+    bool active;
+    int next; // Position of next entry in same bucket chain, -1 if end
+};
+
 class FileStorage {
 private:
     vector<fstream> bucketFiles;
+    const int ENTRY_SIZE = sizeof(FileEntry);
     
-    void writeEntry(fstream& file, const string& key, int value, bool active) {
-        // Write key (65 bytes, null-terminated)
-        char keyBuf[65];
-        strncpy(keyBuf, key.c_str(), 64);
-        keyBuf[64] = '\0';
-        file.write(keyBuf, 65);
-        
-        // Write value (4 bytes)
-        file.write(reinterpret_cast<const char*>(&value), sizeof(int));
-        
-        // Write active flag (1 byte)
-        file.write(reinterpret_cast<const char*>(&active), sizeof(bool));
+    void writeEntry(fstream& file, int pos, const FileEntry& entry) {
+        file.seekp(pos);
+        file.write(reinterpret_cast<const char*>(&entry), ENTRY_SIZE);
     }
     
-    bool readEntry(fstream& file, string& key, int& value, bool& active) {
-        // Read key
-        char keyBuf[65];
-        if (!file.read(keyBuf, 65)) return false;
-        key = keyBuf;
-        
-        // Read value
-        if (!file.read(reinterpret_cast<char*>(&value), sizeof(int))) return false;
-        
-        // Read active flag
-        if (!file.read(reinterpret_cast<char*>(&active), sizeof(bool))) return false;
-        
-        return true;
+    bool readEntry(fstream& file, int pos, FileEntry& entry) {
+        file.seekg(pos);
+        return !!file.read(reinterpret_cast<char*>(&entry), ENTRY_SIZE);
+    }
+    
+    int appendEntry(fstream& file, const FileEntry& entry) {
+        file.seekp(0, ios::end);
+        int pos = file.tellp();
+        file.write(reinterpret_cast<const char*>(&entry), ENTRY_SIZE);
+        return pos;
     }
     
 public:
@@ -64,7 +64,6 @@ public:
             bucketFiles[i].open(get_bucket_filename(i), 
                                ios::in | ios::out | ios::binary);
             if (!bucketFiles[i]) {
-                // Create file if it doesn't exist
                 bucketFiles[i].open(get_bucket_filename(i), 
                                    ios::out | ios::binary);
                 bucketFiles[i].close();
@@ -87,21 +86,24 @@ public:
         fstream& file = bucketFiles[bucket];
         
         // Check if entry already exists
-        file.seekg(0, ios::beg);
-        string readKey;
-        int readValue;
-        bool readActive;
-        
-        while (readEntry(file, readKey, readValue, readActive)) {
-            if (readActive && readKey == key && readValue == value) {
-                return; // Entry already exists
+        FileEntry entry;
+        int pos = 0;
+        while (readEntry(file, pos, entry)) {
+            if (entry.active && strcmp(entry.key, key.c_str()) == 0 && entry.value == value) {
+                return; // Already exists
             }
+            pos += ENTRY_SIZE;
         }
         
-        // Write new entry
-        file.clear();
-        file.seekp(0, ios::end);
-        writeEntry(file, key, value, true);
+        // Create new entry
+        FileEntry newEntry;
+        strncpy(newEntry.key, key.c_str(), 64);
+        newEntry.key[64] = '\0';
+        newEntry.value = value;
+        newEntry.active = true;
+        newEntry.next = -1;
+        
+        appendEntry(file, newEntry);
         file.flush();
     }
     
@@ -109,21 +111,17 @@ public:
         int bucket = get_bucket(key);
         fstream& file = bucketFiles[bucket];
         
-        file.seekg(0, ios::beg);
-        streampos pos = 0;
-        string readKey;
-        int readValue;
-        bool readActive;
-        
-        while (readEntry(file, readKey, readValue, readActive)) {
-            if (readActive && readKey == key && readValue == value) {
+        FileEntry entry;
+        int pos = 0;
+        while (readEntry(file, pos, entry)) {
+            if (entry.active && strcmp(entry.key, key.c_str()) == 0 && entry.value == value) {
                 // Mark as deleted
-                file.seekp(pos);
-                writeEntry(file, key, value, false);
+                entry.active = false;
+                writeEntry(file, pos, entry);
                 file.flush();
                 return;
             }
-            pos = file.tellg();
+            pos += ENTRY_SIZE;
         }
     }
     
@@ -132,15 +130,14 @@ public:
         fstream& file = bucketFiles[bucket];
         
         vector<int> results;
-        file.seekg(0, ios::beg);
-        string readKey;
-        int readValue;
-        bool readActive;
+        FileEntry entry;
+        int pos = 0;
         
-        while (readEntry(file, readKey, readValue, readActive)) {
-            if (readActive && readKey == key) {
-                results.push_back(readValue);
+        while (readEntry(file, pos, entry)) {
+            if (entry.active && strcmp(entry.key, key.c_str()) == 0) {
+                results.push_back(entry.value);
             }
+            pos += ENTRY_SIZE;
         }
         
         sort(results.begin(), results.end());

@@ -10,7 +10,7 @@ using namespace std;
 const int NUM_BUCKETS = 20;
 const string DATA_FILE_PREFIX = "bucket_";
 
-// Custom hash function
+// Simple deterministic hash
 size_t hash_string(const string& str) {
     size_t h = 0;
     for (char c : str) {
@@ -42,7 +42,8 @@ private:
         file.write(reinterpret_cast<const char*>(&value), sizeof(int));
         
         // Write active flag (1 byte)
-        file.write(reinterpret_cast<const char*>(&active), sizeof(bool));
+        char activeByte = active ? 1 : 0;
+        file.write(&activeByte, 1);
     }
     
     bool readEntry(fstream& file, string& key, int& value, bool& active) {
@@ -55,7 +56,9 @@ private:
         if (!file.read(reinterpret_cast<char*>(&value), sizeof(int))) return false;
         
         // Read active flag
-        if (!file.read(reinterpret_cast<char*>(&active), sizeof(bool))) return false;
+        char activeByte;
+        if (!file.read(&activeByte, 1)) return false;
+        active = (activeByte != 0);
         
         return true;
     }
@@ -63,18 +66,6 @@ private:
 public:
     FileStorage() {
         bucketFiles.resize(NUM_BUCKETS);
-        for (int i = 0; i < NUM_BUCKETS; i++) {
-            bucketFiles[i].open(get_bucket_filename(i), 
-                               ios::in | ios::out | ios::binary);
-            if (!bucketFiles[i]) {
-                // Create file if it doesn't exist
-                bucketFiles[i].open(get_bucket_filename(i), 
-                                   ios::out | ios::binary);
-                bucketFiles[i].close();
-                bucketFiles[i].open(get_bucket_filename(i), 
-                                   ios::in | ios::out | ios::binary);
-            }
-        }
     }
     
     ~FileStorage() {
@@ -85,8 +76,24 @@ public:
         }
     }
     
+    void ensureOpen(int bucket) {
+        if (!bucketFiles[bucket].is_open()) {
+            bucketFiles[bucket].open(get_bucket_filename(bucket), 
+                                   ios::in | ios::out | ios::binary);
+            if (!bucketFiles[bucket]) {
+                // Create file if it doesn't exist
+                bucketFiles[bucket].open(get_bucket_filename(bucket), 
+                                       ios::out | ios::binary);
+                bucketFiles[bucket].close();
+                bucketFiles[bucket].open(get_bucket_filename(bucket), 
+                                       ios::in | ios::out | ios::binary);
+            }
+        }
+    }
+    
     void insert(const string& key, int value) {
         int bucket = get_bucket(key);
+        ensureOpen(bucket);
         fstream& file = bucketFiles[bucket];
         
         // Check if entry already exists
@@ -110,6 +117,7 @@ public:
     
     void remove(const string& key, int value) {
         int bucket = get_bucket(key);
+        ensureOpen(bucket);
         fstream& file = bucketFiles[bucket];
         
         file.seekg(0, ios::beg);
@@ -132,6 +140,7 @@ public:
     
     vector<int> find(const string& key) {
         int bucket = get_bucket(key);
+        ensureOpen(bucket);
         fstream& file = bucketFiles[bucket];
         
         vector<int> results;

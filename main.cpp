@@ -4,16 +4,31 @@
 #include <vector>
 #include <algorithm>
 #include <cstring>
+#include <functional>
 
 using namespace std;
 
-const string DATA_FILE = "storage.dat";
+const int NUM_BUCKETS = 19; // Prime number for better distribution
+const string DATA_FILE_PREFIX = "bucket_";
+
+size_t hash_string(const string& str) {
+    hash<string> hasher;
+    return hasher(str);
+}
+
+int get_bucket(const string& key) {
+    return hash_string(key) % NUM_BUCKETS;
+}
+
+string get_bucket_filename(int bucket) {
+    return DATA_FILE_PREFIX + to_string(bucket) + ".dat";
+}
 
 class FileStorage {
 private:
-    fstream file;
+    vector<fstream> bucketFiles;
     
-    void writeEntry(const string& key, int value, bool active) {
+    void writeEntry(fstream& file, const string& key, int value, bool active) {
         // Write key (65 bytes, null-terminated)
         char keyBuf[65];
         strncpy(keyBuf, key.c_str(), 64);
@@ -27,7 +42,7 @@ private:
         file.write(reinterpret_cast<const char*>(&active), sizeof(bool));
     }
     
-    bool readEntry(string& key, int& value, bool& active) {
+    bool readEntry(fstream& file, string& key, int& value, bool& active) {
         // Read key
         char keyBuf[65];
         if (!file.read(keyBuf, 65)) return false;
@@ -44,30 +59,40 @@ private:
     
 public:
     FileStorage() {
-        // Open or create file
-        file.open(DATA_FILE, ios::in | ios::out | ios::binary);
-        if (!file) {
-            // Create file if it doesn't exist
-            file.open(DATA_FILE, ios::out | ios::binary);
-            file.close();
-            file.open(DATA_FILE, ios::in | ios::out | ios::binary);
+        bucketFiles.resize(NUM_BUCKETS);
+        for (int i = 0; i < NUM_BUCKETS; i++) {
+            bucketFiles[i].open(get_bucket_filename(i), 
+                               ios::in | ios::out | ios::binary);
+            if (!bucketFiles[i]) {
+                // Create file if it doesn't exist
+                bucketFiles[i].open(get_bucket_filename(i), 
+                                   ios::out | ios::binary);
+                bucketFiles[i].close();
+                bucketFiles[i].open(get_bucket_filename(i), 
+                                   ios::in | ios::out | ios::binary);
+            }
         }
     }
     
     ~FileStorage() {
-        if (file.is_open()) {
-            file.close();
+        for (auto& file : bucketFiles) {
+            if (file.is_open()) {
+                file.close();
+            }
         }
     }
     
     void insert(const string& key, int value) {
+        int bucket = get_bucket(key);
+        fstream& file = bucketFiles[bucket];
+        
         // Check if entry already exists
         file.seekg(0, ios::beg);
         string readKey;
         int readValue;
         bool readActive;
         
-        while (readEntry(readKey, readValue, readActive)) {
+        while (readEntry(file, readKey, readValue, readActive)) {
             if (readActive && readKey == key && readValue == value) {
                 return; // Entry already exists
             }
@@ -76,22 +101,25 @@ public:
         // Write new entry
         file.clear();
         file.seekp(0, ios::end);
-        writeEntry(key, value, true);
+        writeEntry(file, key, value, true);
         file.flush();
     }
     
     void remove(const string& key, int value) {
+        int bucket = get_bucket(key);
+        fstream& file = bucketFiles[bucket];
+        
         file.seekg(0, ios::beg);
         streampos pos = 0;
         string readKey;
         int readValue;
         bool readActive;
         
-        while (readEntry(readKey, readValue, readActive)) {
+        while (readEntry(file, readKey, readValue, readActive)) {
             if (readActive && readKey == key && readValue == value) {
                 // Mark as deleted
                 file.seekp(pos);
-                writeEntry(key, value, false);
+                writeEntry(file, key, value, false);
                 file.flush();
                 return;
             }
@@ -100,13 +128,16 @@ public:
     }
     
     vector<int> find(const string& key) {
+        int bucket = get_bucket(key);
+        fstream& file = bucketFiles[bucket];
+        
         vector<int> results;
         file.seekg(0, ios::beg);
         string readKey;
         int readValue;
         bool readActive;
         
-        while (readEntry(readKey, readValue, readActive)) {
+        while (readEntry(file, readKey, readValue, readActive)) {
             if (readActive && readKey == key) {
                 results.push_back(readValue);
             }
